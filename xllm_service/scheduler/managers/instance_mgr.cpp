@@ -31,6 +31,7 @@ static std::unordered_map<InstanceType, std::string> ETCD_KEYS_PREFIX_MAP = {
     {InstanceType::DEFAULT, "XLLM:DEFAULT:"},
     {InstanceType::PREFILL, "XLLM:PREFILL:"},
     {InstanceType::DECODE, "XLLM:DECODE:"},
+    {InstanceType::MIX, "XLLM:MIX:"},
 };
 static std::string ETCD_ALL_KEYS_PREFIX = "XLLM:";
 static std::string ETCD_LOADMETRICS_PREFIX = "XLLM:LOADMETRICS:";
@@ -94,6 +95,21 @@ void InstanceMgr::init() {
           case InstanceType::DECODE:
             ist.second.instance_index = decode_index_.size();
             decode_index_.emplace_back(ist.first);
+            break;
+          case InstanceType::MIX:
+            // In the initial state, we will set a MIX type instance to the
+            // instance type that has fewer instances between PREFILL and
+            // DECODE. When the numbers are equal, we will prioritize setting it
+            // as a PREFILL instance.
+            if (prefill_index_.size() <= decode_index_.size()) {
+              ist.second.instance_index = prefill_index_.size();
+              ist.second.current_type = InstanceType::PREFILL;
+              prefill_index_.emplace_back(ist.first);
+            } else {
+              ist.second.instance_index = decode_index_.size();
+              ist.second.current_type = InstanceType::DECODE;
+              decode_index_.emplace_back(ist.first);
+            }
             break;
           default:
             LOG(WARNING) << "Unknown InstanceType: " << int(ist.second.type);
@@ -391,6 +407,21 @@ void InstanceMgr::update_instance_metainfo(const etcd::Response& response,
             iter.second.instance_index = decode_index_.size();
             decode_index_.emplace_back(iter.first);
             break;
+          case InstanceType::MIX:
+            // In the initial state, we will set a MIX type instance to the
+            // instance type that has fewer instances between PREFILL and
+            // DECODE. When the numbers are equal, we will prioritize setting it
+            // as a PREFILL instance.
+            if (prefill_index_.size() <= decode_index_.size()) {
+              iter.second.instance_index = prefill_index_.size();
+              iter.second.current_type = InstanceType::PREFILL;
+              prefill_index_.emplace_back(iter.first);
+            } else {
+              iter.second.instance_index = decode_index_.size();
+              iter.second.current_type = InstanceType::DECODE;
+              decode_index_.emplace_back(iter.first);
+            }
+            break;
           default:
             LOG(WARNING) << "Unknown InstanceType: " << int(iter.second.type);
             break;
@@ -422,6 +453,26 @@ void InstanceMgr::update_instance_metainfo(const etcd::Response& response,
             std::swap(decode_index_[index], decode_index_.back());
             instances_[decode_index_[index]].instance_index = index;
             decode_index_.pop_back();
+            break;
+          case InstanceType::MIX:
+            if (index == -1) {
+              break;
+            }
+            if (instances_[iter].current_type == InstanceType::PREFILL) {
+              if (index >= prefill_index_.size()) {
+                break;
+              }
+              std::swap(prefill_index_[index], prefill_index_.back());
+              instances_[prefill_index_[index]].instance_index = index;
+              prefill_index_.pop_back();
+            } else {
+              if (index >= decode_index_.size()) {
+                break;
+              }
+              std::swap(decode_index_[index], decode_index_.back());
+              instances_[decode_index_[index]].instance_index = index;
+              decode_index_.pop_back();
+            }
             break;
           default:
             LOG(WARNING) << "Unknown InstanceType: "

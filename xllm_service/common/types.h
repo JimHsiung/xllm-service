@@ -74,6 +74,8 @@ enum class InstanceType : int8_t {
   PREFILL = 1,
   // decode instance
   DECODE = 2,
+  // mix instance
+  MIX = 3,
 };
 
 struct LoadMetrics {
@@ -179,6 +181,10 @@ struct InstanceMetaInfo {
   uint64_t latest_timestamp = 0;
 
   uint64_t instance_index = -1;
+
+  // Used to indicate the exact instance type of a MIX type instance currently,
+  // only used when the SLO Aware scheduling policy is enabled.
+  InstanceType current_type = InstanceType::PREFILL;
 
   nlohmann::json serialize_to_json() const {
     nlohmann::json json_val;
