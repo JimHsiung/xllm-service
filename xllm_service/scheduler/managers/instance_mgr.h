@@ -67,6 +67,14 @@ class InstanceMgr final {
   void update_request_metrics(std::shared_ptr<Request> request,
                               RequestAction action);
 
+  bool get_min_prefill_time_instance(std::string& instance_name,
+                                     int64_t& estimated_prefill_time);
+
+  bool get_min_decode_length_instance(std::string& instance_name,
+                                      int64_t& decode_length);
+
+  TtftPredictor& get_ttft_predictor(const std::string& instance_name);
+
   void set_as_master();
 
  private:

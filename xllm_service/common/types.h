@@ -125,8 +125,9 @@ struct LatencyMetrics {
 enum class RequestAction : int32_t {
   SCHEDULE = 0,
   FINISH_PREFILL = 1,
-  FINISH_DECODE = 2,
-  CANCEL = 3,
+  GENERATE = 2,
+  FINISH_DECODE = 3,
+  CANCEL = 4,
 };
 
 // Record the request metrics of the instance

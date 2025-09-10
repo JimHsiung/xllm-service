@@ -521,45 +521,122 @@ void InstanceMgr::update_request_metrics(std::shared_ptr<Request> request,
     return;
   }
 
-  int64_t token_length = request->token_ids.size();
+  int64_t num_prompt_tokens = request->token_ids.size();
+  int64_t num_generated_tokens = request->num_generated_tokens;
   switch (action) {
     case RequestAction::SCHEDULE:
       // update the request metrics for prefill and decode instances when
       // request is scheduled
       prefill_it->second.prefill_request_num += 1;
-      prefill_it->second.prefill_token_num += token_length;
+      prefill_it->second.prefill_token_num += num_prompt_tokens;
       prefill_it->second.estimated_prefill_time += request->estimated_ttft;
 
       decode_it->second.decode_request_num += 1;
-      decode_it->second.decode_token_num += token_length;
+      decode_it->second.decode_token_num += num_prompt_tokens;
       break;
     case RequestAction::FINISH_PREFILL:
-      // only update the request metrics for prefill instance when request
+      // update the request metrics for prefill and decode instance when request
       // finishes the prefill phase
       prefill_it->second.prefill_request_num -= 1;
-      prefill_it->second.prefill_token_num -= token_length;
+      prefill_it->second.prefill_token_num -= num_prompt_tokens;
       prefill_it->second.estimated_prefill_time -= request->estimated_ttft;
+
+      decode_it->second.decode_token_num += 1;
+      break;
+    case RequestAction::GENERATE:
+      // update the request metrics for decode instance when request generate a
+      // token
+      decode_it->second.decode_token_num += 1;
       break;
     case RequestAction::FINISH_DECODE:
       // update the request metrics for decode instance when request finishes
       // the decode phase
       decode_it->second.decode_request_num -= 1;
-      decode_it->second.decode_token_num -= token_length;
+      decode_it->second.decode_token_num -=
+          (num_prompt_tokens + num_generated_tokens);
       break;
     case RequestAction::CANCEL:
       // update the request metrics for prefill and decode instances when
       // request is cancelled
       prefill_it->second.prefill_request_num -= 1;
-      prefill_it->second.prefill_token_num -= token_length;
+      prefill_it->second.prefill_token_num -= num_prompt_tokens;
       prefill_it->second.estimated_prefill_time -= request->estimated_ttft;
 
       decode_it->second.decode_request_num -= 1;
-      decode_it->second.decode_token_num -= token_length;
+      decode_it->second.decode_token_num -=
+          (num_prompt_tokens + num_generated_tokens);
       break;
     default:
       LOG(ERROR) << "Unknown RequestAction: " << static_cast<int32_t>(action);
       break;
   }
+}
+
+bool InstanceMgr::get_min_prefill_time_instance(
+    std::string& instance_name,
+    int64_t& estimated_prefill_time) {
+  std::shared_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  std::lock_guard<std::mutex> request_metrics_lock(request_metrics_mutex_);
+  if (prefill_index_.empty()) {
+    LOG(ERROR) << "No prefill or default instance found!";
+    return false;
+  }
+
+  // get min prefill time instance from request metrics
+  auto min_prefill_instance = prefill_index_[0];
+  int64_t min_prefill_time =
+      request_metrics_[min_prefill_instance].estimated_prefill_time;
+  for (auto& prefill_instance : prefill_index_) {
+    int64_t prefill_time =
+        request_metrics_[prefill_instance].estimated_prefill_time;
+    if (prefill_time < min_prefill_time) {
+      min_prefill_instance = prefill_instance;
+      min_prefill_time = prefill_time;
+    }
+  }
+
+  instance_name = min_prefill_instance;
+  estimated_prefill_time = min_prefill_time;
+  return true;
+}
+
+bool InstanceMgr::get_min_decode_length_instance(std::string& instance_name,
+                                                 int64_t& decode_length) {
+  std::shared_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  std::lock_guard<std::mutex> request_metrics_lock(request_metrics_mutex_);
+  if (decode_index_.empty()) {
+    LOG(ERROR) << "No decode instance found!";
+    return false;
+  }
+
+  // get min decode length instance from request metrics
+  auto min_decode_instance = decode_index_[0];
+  int64_t min_decode_length =
+      request_metrics_[min_decode_instance].decode_token_num;
+  for (auto& decode_instance : decode_index_) {
+    int64_t decode_token_num =
+        request_metrics_[decode_instance].decode_token_num;
+    if (decode_token_num < min_decode_length) {
+      min_decode_instance = decode_instance;
+      min_decode_length = decode_token_num;
+    }
+  }
+
+  instance_name = min_decode_instance;
+  decode_length = min_decode_length;
+  return true;
+}
+
+TtftPredictor& InstanceMgr::get_ttft_predictor(
+    const std::string& instance_name) {
+  std::lock_guard<std::mutex> lock(ttft_predictor_mutex_);
+
+  auto it = ttft_predictors_.find(instance_name);
+  if (it == ttft_predictors_.end()) {
+    LOG(FATAL) << "Find TTFT Predictor failed, instance name : "
+               << instance_name;
+  }
+  return it->second;
 }
 
 }  // namespace xllm_service
