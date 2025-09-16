@@ -60,3 +60,15 @@ DECLARE_int32(block_size);
 DECLARE_string(tokenizer_path);
 
 DECLARE_bool(enable_request_trace);
+
+DECLARE_bool(enable_instance_update);
+
+DECLARE_double(instance_update_interval);
+
+DECLARE_int32(target_ttft);
+
+DECLARE_int32(target_tpot);
+
+DECLARE_int32(decode_load_sliding_window_size);
+
+DECLARE_int32(instance_flip_cooldown_count);

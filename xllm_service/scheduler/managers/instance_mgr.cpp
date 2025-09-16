@@ -395,8 +395,6 @@ void InstanceMgr::update_instance_metainfo(const etcd::Response& response,
           request_metrics_.emplace(iter.first, RequestMetrics());
         }
 
-        instances_.insert(std::make_pair(iter.first, std::move(iter.second)));
-
         switch (iter.second.type) {
           case InstanceType::DEFAULT:
           case InstanceType::PREFILL:
@@ -426,6 +424,8 @@ void InstanceMgr::update_instance_metainfo(const etcd::Response& response,
             LOG(WARNING) << "Unknown InstanceType: " << int(iter.second.type);
             break;
         }
+
+        instances_.insert(std::make_pair(iter.first, std::move(iter.second)));
       }
 
       for (auto& iter : delete_list) {
@@ -623,6 +623,16 @@ void InstanceMgr::update_request_metrics(std::shared_ptr<Request> request,
   }
 }
 
+uint32_t InstanceMgr::get_prefill_instance_num() {
+  std::shared_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  return prefill_index_.size();
+}
+
+uint32_t InstanceMgr::get_decode_instance_num() {
+  std::shared_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  return decode_index_.size();
+}
+
 bool InstanceMgr::get_min_prefill_time_instance(
     std::string& instance_name,
     int64_t& estimated_prefill_time) {
@@ -651,6 +661,33 @@ bool InstanceMgr::get_min_prefill_time_instance(
   return true;
 }
 
+bool InstanceMgr::get_min_recent_ttft_instance(std::string& instance_name,
+                                               int64_t& recent_ttft) {
+  std::shared_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  std::lock_guard<std::mutex> latency_metrics_lock(latency_metrics_mutex_);
+
+  if (prefill_index_.empty()) {
+    LOG(ERROR) << "No prefill or default instance found!";
+    return false;
+  }
+
+  // get min recent ttft instance from latency metrics
+  auto min_recent_ttft_instance = prefill_index_[0];
+  int64_t min_recent_ttft =
+      latency_metrics_[min_recent_ttft_instance].recent_max_ttft;
+  for (auto& prefill_instance : prefill_index_) {
+    int64_t recent_ttft = latency_metrics_[prefill_instance].recent_max_ttft;
+    if (recent_ttft < min_recent_ttft) {
+      min_recent_ttft_instance = prefill_instance;
+      min_recent_ttft = recent_ttft;
+    }
+  }
+
+  instance_name = min_recent_ttft_instance;
+  recent_ttft = min_recent_ttft;
+  return true;
+}
+
 bool InstanceMgr::get_min_decode_length_instance(std::string& instance_name,
                                                  int64_t& decode_length) {
   std::shared_lock<std::shared_mutex> instance_lock(inst_mutex_);
@@ -676,6 +713,80 @@ bool InstanceMgr::get_min_decode_length_instance(std::string& instance_name,
   instance_name = min_decode_instance;
   decode_length = min_decode_length;
   return true;
+}
+
+bool InstanceMgr::get_min_recent_tbt_instance(std::string& instance_name,
+                                              int64_t& recent_tbt) {
+  std::shared_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  std::lock_guard<std::mutex> latency_metrics_lock(latency_metrics_mutex_);
+  if (decode_index_.empty()) {
+    LOG(ERROR) << "No decode instance found!";
+    return false;
+  }
+
+  // get min recent tbt instance from latency metrics
+  auto min_recent_tbt_instance = decode_index_[0];
+  int64_t min_recent_tbt =
+      latency_metrics_[min_recent_tbt_instance].recent_max_tbt;
+  for (auto& decode_instance : decode_index_) {
+    int64_t recent_tbt = latency_metrics_[decode_instance].recent_max_tbt;
+    if (recent_tbt < min_recent_tbt) {
+      min_recent_tbt_instance = decode_instance;
+      min_recent_tbt = recent_tbt;
+    }
+  }
+
+  instance_name = min_recent_tbt_instance;
+  recent_tbt = min_recent_tbt;
+  return true;
+}
+
+void InstanceMgr::flip_prefill_to_decode(std::string& instance_name) {
+  std::unique_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  if (prefill_index_.size() <= 1) {
+    // Ensure there is at least one prefill instance.
+    return;
+  }
+
+  if (instances_.find(instance_name) == instances_.end()) {
+    LOG(ERROR) << "Can't find instance, instance_name: " << instance_name;
+    return;
+  }
+
+  // delete instance name from prefill_index_
+  uint64_t index = instances_[instance_name].instance_index;
+  std::swap(prefill_index_[index], prefill_index_.back());
+  instances_[prefill_index_[index]].instance_index = index;
+  prefill_index_.pop_back();
+
+  // insert instance name to decode_index_
+  instances_[instance_name].instance_index = decode_index_.size();
+  instances_[instance_name].current_type = InstanceType::DECODE;
+  decode_index_.emplace_back(instance_name);
+}
+
+void InstanceMgr::flip_decode_to_prefill(std::string& instance_name) {
+  std::unique_lock<std::shared_mutex> instance_lock(inst_mutex_);
+  if (decode_index_.size() <= 1) {
+    // Ensure there is at least one decode instance.
+    return;
+  }
+
+  if (instances_.find(instance_name) == instances_.end()) {
+    LOG(ERROR) << "Can't find instance, instance_name: " << instance_name;
+    return;
+  }
+
+  // delete instance name from decode_index_
+  uint64_t index = instances_[instance_name].instance_index;
+  std::swap(decode_index_[index], decode_index_.back());
+  instances_[decode_index_[index]].instance_index = index;
+  decode_index_.pop_back();
+
+  // insert instance name to prefill_index
+  instances_[instance_name].instance_index = prefill_index_.size();
+  instances_[instance_name].current_type = InstanceType::PREFILL;
+  prefill_index_.emplace_back(instance_name);
 }
 
 TtftPredictor& InstanceMgr::get_ttft_predictor(

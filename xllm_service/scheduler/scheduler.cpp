@@ -48,7 +48,7 @@ Scheduler::Scheduler(const Options& options) : options_(options) {
     lb_policy_ =
         std::make_unique<CacheAwareRouting>(instance_mgr_, global_kvcache_mgr_);
   } else if (options.load_balance_policy() == "SLO_AWARE") {
-    lb_policy_ = std::make_unique<SloAwarePolicy>(instance_mgr_);
+    lb_policy_ = std::make_unique<SloAwarePolicy>(options, instance_mgr_);
   } else {
     lb_policy_ = std::make_unique<RoundRobin>(instance_mgr_);
   }

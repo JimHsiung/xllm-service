@@ -15,21 +15,43 @@ limitations under the License.
 
 #pragma once
 
+#include "common/options.h"
+#include "common/types.h"
 #include "loadbalance_policy.h"
 
 namespace xllm_service {
 
 class SloAwarePolicy final : public LoadBalancePolicy {
  public:
-  SloAwarePolicy(std::shared_ptr<InstanceMgr> instance_mgr)
-      : LoadBalancePolicy(instance_mgr) {}
+  SloAwarePolicy(const Options& options,
+                 std::shared_ptr<InstanceMgr> instance_mgr);
 
-  virtual ~SloAwarePolicy() = default;
+  virtual ~SloAwarePolicy();
 
   bool select_instances_pair(std::shared_ptr<Request> request) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SloAwarePolicy);
+
+  void update_instance();
+
+  bool get_min_load_prefill_instance(std::string& min_load_prefill_instance,
+                                     InstanceLoad& min_prefill_load);
+
+  bool get_min_load_decode_instance(std::string& min_load_decode_instance,
+                                    InstanceLoad& min_decode_load);
+
+  Options options_;
+
+  bool exited_ = false;
+
+  std::unique_ptr<std::thread> update_instance_thread_;
+
+  std::deque<InstanceLoad> decode_load_sliding_window_;
+
+  int32_t prefill_to_decode_cooldown_count_ = 0;
+
+  int32_t decode_to_prefill_cooldown_count_ = 0;
 };
 
 }  // namespace xllm_service

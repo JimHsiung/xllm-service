@@ -193,7 +193,8 @@ int main(int argc, char* argv[]) {
           FLAGS_detect_disconnected_instance_interval)
       .enable_request_trace(FLAGS_enable_request_trace)
       .block_size(FLAGS_block_size)
-      .tokenizer_path(FLAGS_tokenizer_path);
+      .tokenizer_path(FLAGS_tokenizer_path)
+      .instance_update_interval(FLAGS_instance_update_interval);
 
   xllm_service::Master master(options);
 

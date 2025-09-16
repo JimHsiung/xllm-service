@@ -78,6 +78,13 @@ enum class InstanceType : int8_t {
   MIX = 3,
 };
 
+enum class InstanceLoad : int8_t {
+  IDLE = 0,
+  LOW = 1,
+  MEDIUM = 2,
+  HIGH = 3,
+};
+
 struct LoadMetrics {
   LoadMetrics() : waiting_requests_num(0), gpu_cache_usage_perc(0) {};
   LoadMetrics(const uint64_t& waiting_reqs_num, const float& usage)
@@ -116,6 +123,8 @@ struct LoadMetrics {
 
 // Record the latency monitoring metrics of the instance over the recent period
 struct LatencyMetrics {
+  LatencyMetrics() : recent_max_ttft(0), recent_max_tbt(0) {}
+
   LatencyMetrics(const int64_t& recent_max_ttft, const int64_t& recent_max_tbt)
       : recent_max_ttft(recent_max_ttft), recent_max_tbt(recent_max_tbt) {}
 
