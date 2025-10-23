@@ -83,9 +83,31 @@ DEFINE_int32(detect_disconnected_instance_interval,
              "The interval that server detect the disconnected instance.");
 
 DEFINE_int32(block_size,
-             16,
-             "Number of slots per kv cache block. Default is 16.");
+             128,
+             "Number of slots per kv cache block. Default is 128.");
 
 DEFINE_string(tokenizer_path, "", "tokenizer config path.");
 
 DEFINE_bool(enable_request_trace, false, "Whether to enable request trace");
+
+DEFINE_bool(enable_instance_update,
+            false,
+            "Whether to enable instance update.");
+
+DEFINE_double(instance_update_interval,
+              0.5,
+              "Instance update interval in seconds.");
+
+DEFINE_int32(target_ttft,
+             1000,
+             "Target Time to First Token (TTFT), in milliseconds.");
+
+DEFINE_int32(target_tpot,
+             50,
+             "Target Time Per Output Token (TPOT), in milliseconds.");
+
+DEFINE_int32(decode_load_sliding_window_size,
+             8,
+             "Decode instance load sliding window size.");
+
+DEFINE_int32(instance_flip_cooldown_count, 4, "Instance flip cooldown count.");

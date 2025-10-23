@@ -74,6 +74,15 @@ enum class InstanceType : int8_t {
   PREFILL = 1,
   // decode instance
   DECODE = 2,
+  // mix instance
+  MIX = 3,
+};
+
+enum class InstanceLoad : int8_t {
+  IDLE = 0,
+  LOW = 1,
+  MEDIUM = 2,
+  HIGH = 3,
 };
 
 struct LoadMetrics {
@@ -114,6 +123,8 @@ struct LoadMetrics {
 
 // Record the latency monitoring metrics of the instance over the recent period
 struct LatencyMetrics {
+  LatencyMetrics() : recent_max_ttft(0), recent_max_tbt(0) {}
+
   LatencyMetrics(const int64_t& recent_max_ttft, const int64_t& recent_max_tbt)
       : recent_max_ttft(recent_max_ttft), recent_max_tbt(recent_max_tbt) {}
 
@@ -125,8 +136,9 @@ struct LatencyMetrics {
 enum class RequestAction : int32_t {
   SCHEDULE = 0,
   FINISH_PREFILL = 1,
-  FINISH_DECODE = 2,
-  CANCEL = 3,
+  GENERATE = 2,
+  FINISH_DECODE = 3,
+  CANCEL = 4,
 };
 
 // Record the request metrics of the instance
@@ -147,6 +159,20 @@ struct RequestMetrics {
   // Estimated execution time for all prefill requests on the instance.
   // The unit is milliseconds.
   int64_t estimated_prefill_time;
+};
+
+struct InstanceMetrics {
+  uint32_t prefill_instance_num;
+  uint32_t decode_instance_num;
+
+  std::string min_recent_ttft_instance;
+  std::string min_recent_tbt_instance;
+
+  int64_t avg_recent_ttft;
+  int64_t avg_recent_tbt;
+
+  float avg_prefill_cache_usage;
+  float avg_decode_cache_usage;
 };
 
 struct InstanceMetaInfo {
@@ -178,6 +204,10 @@ struct InstanceMetaInfo {
   uint64_t latest_timestamp = 0;
 
   uint64_t instance_index = -1;
+
+  // Used to indicate the exact instance type of a MIX type instance currently,
+  // only used when the SLO Aware scheduling policy is enabled.
+  InstanceType current_type = InstanceType::PREFILL;
 
   nlohmann::json serialize_to_json() const {
     nlohmann::json json_val;

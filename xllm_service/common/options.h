@@ -57,6 +57,8 @@ class Options {
 
   PROPERTY(int32_t, detect_disconnected_instance_interval) = 15;
 
+  PROPERTY(double, instance_update_interval) = 0.5;
+
   // scheduler options
   PROPERTY(std::string, load_balance_policy);
 

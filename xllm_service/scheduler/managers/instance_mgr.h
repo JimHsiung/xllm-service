@@ -67,6 +67,17 @@ class InstanceMgr final {
   void update_request_metrics(std::shared_ptr<Request> request,
                               RequestAction action);
 
+  // select instances based on the SLO
+  bool select_instance_pair_on_slo(Routing* routing);
+
+  void get_instance_metrics(InstanceMetrics& metrics);
+
+  void flip_prefill_to_decode(std::string& instance_name);
+
+  void flip_decode_to_prefill(std::string& instance_name);
+
+  TtftPredictor& get_ttft_predictor(const std::string& instance_name);
+
   void set_as_master();
 
  private:
@@ -81,6 +92,14 @@ class InstanceMgr final {
 
   void update_load_metrics(const etcd::Response& response,
                            const uint64_t& prefix_len);
+
+  bool get_min_prefill_time_instance(std::string& instance_name);
+
+  bool get_min_decode_length_instance(std::string& instance_name);
+
+  void get_prefill_instance_metrics(InstanceMetrics& metrics);
+
+  void get_decode_instance_metrics(InstanceMetrics& metrics);
 
  private:
   Options options_;
