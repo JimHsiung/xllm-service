@@ -235,6 +235,15 @@ std::vector<std::string> Scheduler::get_static_prefill_list(
   return instance_mgr_->get_static_prefill_list(instance_name);
 }
 
+InstanceMetaInfo Scheduler::get_matching_instance(
+    const std::string& instance_name,
+    int32_t world_size,
+    int32_t dp_size,
+    int32_t ep_size) {
+  return instance_mgr_->get_matching_instance(
+      instance_name, world_size, dp_size, ep_size);
+}
+
 Tokenizer* Scheduler::get_tls_tokenizer() {
   thread_local std::unique_ptr<Tokenizer> tls_tokenizer(tokenizer_->clone());
   return tls_tokenizer.get();

@@ -55,6 +55,11 @@ class InstanceMgr final {
   std::vector<std::string> get_static_prefill_list(
       const std::string& instance_name);
 
+  InstanceMetaInfo get_matching_instance(const std::string& instance_name,
+                                         int32_t world_size,
+                                         int32_t dp_size,
+                                         int32_t ep_size);
+
   void get_load_metrics(LoadBalanceInfos* infos);
 
   std::shared_ptr<brpc::Channel> get_channel(const std::string& instance_name);

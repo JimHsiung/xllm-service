@@ -164,6 +164,27 @@ std::vector<std::string> InstanceMgr::get_static_prefill_list(
   return prefill_list;
 }
 
+InstanceMetaInfo InstanceMgr::get_matching_instance(
+    const std::string& instance_name,
+    int32_t world_size,
+    int32_t dp_size,
+    int32_t ep_size) {
+  std::shared_lock<std::shared_mutex> lock(inst_mutex_);
+  for (auto& inst : instances_) {
+    // skip self
+    if (inst.first == instance_name) {
+      continue;
+    }
+    // matching criteria
+    if (inst.second.world_size == world_size &&
+        inst.second.dp_size == dp_size && inst.second.ep_size == ep_size) {
+      return inst.second;
+    }
+  }
+
+  return InstanceMetaInfo();
+}
+
 void InstanceMgr::get_load_metrics(LoadBalanceInfos* infos) {
   std::shared_lock<std::shared_mutex> inst_lock(inst_mutex_);
   std::shared_lock<std::shared_mutex> metric_lock(load_metric_mutex_);

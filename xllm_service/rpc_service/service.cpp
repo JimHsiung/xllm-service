@@ -145,6 +145,33 @@ void XllmRpcService::GetStaticPrefillList(
   }
 }
 
+InstanceMetaInfo XllmRpcServiceImpl::get_matching_instance(
+    const std::string& instance_name,
+    int32_t world_size,
+    int32_t dp_size,
+    int32_t ep_size) {
+  return scheduler_->get_matching_instance(
+      instance_name, world_size, dp_size, ep_size);
+}
+
+void XllmRpcService::GetMatchingInstance(
+    google::protobuf::RpcController* cntl_base,
+    const proto::MatchInstanceRequest* req,
+    proto::WeightTransferAddrs* resp,
+    google::protobuf::Closure* done) {
+  brpc::ClosureGuard done_guard(done);
+  InstanceMetaInfo metainfo = xllm_rpc_service_impl_->get_matching_instance(
+      req->instance_name(), req->world_size(), req->dp_size(), req->ep_size());
+
+  if (metainfo.name.empty()) {
+    return;
+  }
+
+  for (auto& addr : metainfo.weight_transfer_addrs) {
+    *(resp->add_addrs()) = addr;
+  }
+}
+
 void XllmRpcService::Generations(google::protobuf::RpcController* cntl_base,
                                  const proto::DisaggStreamGenerations* req,
                                  proto::StatusSet* resp,

@@ -79,9 +79,9 @@ enum class InstanceType : int8_t {
 };
 
 struct LoadMetrics {
-  LoadMetrics() : waiting_requests_num(0), gpu_cache_usage_perc(0) {};
+  LoadMetrics() : waiting_requests_num(0), gpu_cache_usage_perc(0){};
   LoadMetrics(const uint64_t& waiting_reqs_num, const float& usage)
-      : waiting_requests_num(waiting_reqs_num), gpu_cache_usage_perc(usage) {};
+      : waiting_requests_num(waiting_reqs_num), gpu_cache_usage_perc(usage){};
 
   uint64_t waiting_requests_num;
   float gpu_cache_usage_perc;
@@ -175,7 +175,11 @@ struct InstanceMetaInfo {
   std::vector<std::string> addrs;
   std::vector<uint64_t> k_cache_ids;
   std::vector<uint64_t> v_cache_ids;
-  int32_t dp_size;
+  int32_t dp_size = 1;
+  int32_t world_size = 1;
+  int32_t ep_size = 1;
+  // weight transfer info
+  std::vector<std::string> weight_transfer_addrs;
   // device network info
   std::vector<std::string> device_ips;
   std::vector<uint16_t> ports;
@@ -203,6 +207,9 @@ struct InstanceMetaInfo {
     json_val["k_cache_ids"] = k_cache_ids;
     json_val["v_cache_ids"] = v_cache_ids;
     json_val["dp_size"] = dp_size;
+    json_val["world_size"] = world_size;
+    json_val["ep_size"] = ep_size;
+    json_val["weight_transfer_addrs"] = weight_transfer_addrs;
     json_val["device_ips"] = device_ips;
     json_val["ports"] = ports;
     json_val["ttft_profiling_data"] = ttft_profiling_data;
@@ -240,6 +247,10 @@ struct InstanceMetaInfo {
       }
 
       dp_size = json_value.at("dp_size").get<int32_t>();
+      world_size = json_value.value("world_size", 1);
+      ep_size = json_value.value("ep_size", 1);
+      weight_transfer_addrs =
+          json_value.value("weight_transfer_addrs", std::vector<std::string>());
       device_ips = json_value.at("device_ips").get<std::vector<std::string>>();
       ports = json_value.at("ports").get<std::vector<uint16_t>>();
 
