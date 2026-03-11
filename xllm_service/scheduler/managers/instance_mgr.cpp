@@ -18,6 +18,7 @@ limitations under the License.
 #include <absl/strings/str_join.h>
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -30,8 +31,10 @@ limitations under the License.
 #include "common/utils.h"
 #include "common/xllm/output.h"
 #include "common/xllm/status.h"
+#include "d2d_transmission_optimizer.h"
 #include "disagg_pd.pb.h"
 #include "scheduler/scheduler.h"
+#include "xllm_service.pb.h"
 
 namespace {
 using xllm_service::InstanceType;
@@ -164,25 +167,261 @@ std::vector<std::string> InstanceMgr::get_static_prefill_list(
   return prefill_list;
 }
 
-InstanceMetaInfo InstanceMgr::get_matching_instance(
+WeightTransferPlanResult InstanceMgr::get_weight_transfer_plan(
     const std::string& instance_name,
     int32_t world_size,
     int32_t dp_size,
     int32_t ep_size) {
   std::shared_lock<std::shared_mutex> lock(inst_mutex_);
+  WeightTransferPlanResult result;
+  bool has_matched_instance = false;
+  std::vector<ExpertDistribution> expert_dists;
   for (auto& inst : instances_) {
     // skip self
     if (inst.first == instance_name) {
       continue;
     }
+
     // matching criteria
     if (inst.second.world_size == world_size &&
         inst.second.dp_size == dp_size && inst.second.ep_size == ep_size) {
-      return inst.second;
+      // Call GetExpertDistribution RPC
+      auto channel = get_channel(inst.first);
+      if (!channel) {
+        LOG(ERROR) << "Failed to get channel for instance " << inst.first;
+        continue;
+      }
+
+      xllm::proto::XllmAPIService_Stub stub(channel.get());
+      brpc::Controller cntl;
+      xllm::proto::Empty request;
+      xllm::proto::GetExpertDistributionResponse response;
+
+      stub.GetExpertDistribution(&cntl, &request, &response, nullptr);
+      if (cntl.Failed()) {
+        LOG(ERROR) << "GetExpertDistribution RPC failed for instance "
+                   << inst.first << ": " << cntl.ErrorText();
+        continue;
+      }
+
+      ExpertDistribution dist;
+      dist.instance_name = inst.first;
+      dist.dims =
+          std::vector<int32_t>(response.dims().begin(), response.dims().end());
+      dist.data =
+          std::vector<int32_t>(response.data().begin(), response.data().end());
+
+      if (dist.dims.size() < 3) {
+        LOG(ERROR) << "Invalid expert distribution dims for instance "
+                   << inst.first << ", dims_size=" << dist.dims.size();
+        continue;
+      }
+      int32_t layer_num = dist.dims[0];
+      int32_t device_num = dist.dims[1];
+      int32_t experts_per_device = dist.dims[2];
+      if (layer_num <= 0 || device_num <= 0 || experts_per_device <= 0) {
+        LOG(ERROR) << "Invalid expert distribution dims for instance "
+                   << inst.first << ", dims=[" << absl::StrJoin(dist.dims, ", ")
+                   << "]";
+        continue;
+      }
+
+      const int64_t expected_data_size =
+          static_cast<int64_t>(layer_num) * device_num * experts_per_device;
+      if (static_cast<int64_t>(dist.data.size()) < expected_data_size) {
+        LOG(ERROR) << "Invalid expert distribution data size for instance "
+                   << inst.first << ", expected>=" << expected_data_size
+                   << ", actual=" << dist.data.size();
+        continue;
+      }
+      if (inst.second.weight_transfer_addrs.size() <
+          static_cast<size_t>(device_num)) {
+        LOG(ERROR) << "Invalid weight_transfer_addrs for instance "
+                   << inst.first << ", expected>=" << device_num
+                   << ", actual=" << inst.second.weight_transfer_addrs.size();
+        continue;
+      }
+
+      expert_dists.emplace_back(std::move(dist));
+      if (!has_matched_instance) {
+        result.matched_instance = inst.second;
+        result.matched = true;
+        has_matched_instance = true;
+      }
     }
   }
 
-  return InstanceMetaInfo();
+  if (!result.matched) {
+    return result;
+  }
+
+  if (!FLAGS_enable_d2d_transmission_optimizer) {
+    LOG(INFO) << "Skip D2DTransmissionOptimizer because flag "
+              << "enable_d2d_transmission_optimizer is disabled.";
+    return result;
+  }
+
+  if (ep_size != world_size) {
+    LOG(INFO) << "Skip D2DTransmissionOptimizer because ep_size(" << ep_size
+              << ") != world_size(" << world_size << ")";
+    return result;
+  }
+  if (world_size <= 0 || ep_size <= 0 || expert_dists.empty()) {
+    LOG(WARNING) << "Skip D2DTransmissionOptimizer due to invalid config."
+                 << " world_size=" << world_size << ", ep_size=" << ep_size
+                 << ", expert_dists=" << expert_dists.size();
+    return result;
+  }
+
+  absl::Time connect_start_time = absl::Now();
+  D2DTransmissionOptimizer opt;
+  int32_t layer_num = expert_dists[0].dims[0];
+  int32_t device_num = expert_dists[0].dims[1];
+  int32_t experts_per_device = expert_dists[0].dims[2];
+  result.expert_transfer_plan.rank_plans.resize(world_size);
+
+  for (int32_t l = 0; l < layer_num; ++l) {
+    std::unordered_map<int32_t,
+                       std::vector<D2DTransmissionOptimizer::GlobalNpu>>
+        expert_to_src;
+    int64_t base = static_cast<int64_t>(l) * device_num * experts_per_device;
+    for (const auto& dist : expert_dists) {
+      if (dist.dims.size() < 3 || dist.dims[0] != layer_num ||
+          dist.dims[1] != device_num || dist.dims[2] != experts_per_device) {
+        LOG(ERROR) << "Skip distribution due to inconsistent dims, instance="
+                   << dist.instance_name;
+        continue;
+      }
+      if (static_cast<int64_t>(dist.data.size()) <
+          base + static_cast<int64_t>(device_num) * experts_per_device) {
+        LOG(ERROR) << "Skip distribution due to insufficient data, instance="
+                   << dist.instance_name;
+        continue;
+      }
+      auto inst_it = instances_.find(dist.instance_name);
+      if (inst_it == instances_.end() ||
+          inst_it->second.weight_transfer_addrs.size() <
+              static_cast<size_t>(device_num)) {
+        LOG(ERROR)
+            << "Skip distribution due to missing transfer addrs, instance="
+            << dist.instance_name;
+        continue;
+      }
+      for (int32_t d = 0; d < device_num; ++d) {
+        for (int32_t e = 0; e < experts_per_device; ++e) {
+          int32_t expert_id =
+              dist.data[base + static_cast<int64_t>(d) * experts_per_device +
+                        e];
+          D2DTransmissionOptimizer::GlobalNpu gn;
+          gn.instance = inst_it->second.weight_transfer_addrs[d];
+          gn.local_npu = d;
+          expert_to_src[expert_id].push_back(gn);
+        }
+      }
+    }
+    std::vector<int32_t> unique_experts;
+    unique_experts.reserve(expert_to_src.size());
+    for (const auto& kv : expert_to_src) {
+      unique_experts.push_back(kv.first);
+    }
+    std::sort(unique_experts.begin(), unique_experts.end());
+    auto steps = opt.optimize_layer(unique_experts, expert_to_src);
+    int32_t N = static_cast<int32_t>(steps.size());
+    int32_t expected_n = static_cast<int32_t>(unique_experts.size());
+
+    auto fill_layer_plan_with_legacy_split = [&]() {
+      int32_t avg_n = N / ep_size;
+      for (int32_t r = 0; r < world_size; ++r) {
+        int32_t local_idx = r % ep_size;
+        int32_t start_expert = local_idx * avg_n;
+        int32_t end_expert = (local_idx + 1) * avg_n;
+        auto& layer_plan = result.expert_transfer_plan.rank_plans[r]
+                               .layer_plans.emplace_back();
+        std::unordered_map<std::string, size_t> addr_to_idx;
+        for (const auto& s : steps) {
+          if (s.expert_id >= start_expert && s.expert_id < end_expert) {
+            size_t idx = 0;
+            auto idx_it = addr_to_idx.find(s.src.instance);
+            if (idx_it == addr_to_idx.end()) {
+              idx = layer_plan.source_experts.size();
+              addr_to_idx.emplace(s.src.instance, idx);
+              layer_plan.source_experts.push_back({s.src.instance, {}});
+            } else {
+              idx = idx_it->second;
+            }
+            layer_plan.source_experts[idx].expert_ids.push_back(s.expert_id);
+          }
+        }
+      }
+    };
+
+    if (N != expected_n) {
+      LOG(ERROR) << "Optimizer output size mismatch at layer " << l
+                 << ": steps=" << N << ", expected=" << expected_n
+                 << ". Fallback to legacy split.";
+      fill_layer_plan_with_legacy_split();
+      LOG(INFO) << "-------------------------";
+      continue;
+    }
+
+    std::unordered_map<int32_t, D2DTransmissionOptimizer::Step> step_by_expert;
+    step_by_expert.reserve(steps.size());
+    for (const auto& s : steps) {
+      auto insert_result = step_by_expert.emplace(s.expert_id, s);
+      if (!insert_result.second) {
+        LOG(WARNING)
+            << "Duplicate expert assignment in optimizer output. layer=" << l
+            << ", expert_id=" << s.expert_id
+            << ", keep=" << insert_result.first->second.src.instance
+            << ", drop=" << s.src.instance;
+      }
+    }
+    if (static_cast<int32_t>(step_by_expert.size()) != expected_n) {
+      LOG(ERROR)
+          << "Optimizer output has duplicate or missing experts at layer " << l
+          << ": unique_steps=" << step_by_expert.size()
+          << ", expected=" << expected_n << ". Fallback to legacy split.";
+      fill_layer_plan_with_legacy_split();
+      LOG(INFO) << "-------------------------";
+      continue;
+    }
+
+    int32_t base_n = expected_n / ep_size;
+    int32_t rem = expected_n % ep_size;
+    for (int32_t r = 0; r < world_size; ++r) {
+      int32_t local_idx = r % ep_size;
+      int32_t start_expert = local_idx * base_n + std::min(local_idx, rem);
+      int32_t len = base_n + (local_idx < rem ? 1 : 0);
+      int32_t end_expert = start_expert + len;
+
+      auto& layer_plan =
+          result.expert_transfer_plan.rank_plans[r].layer_plans.emplace_back();
+      std::unordered_map<std::string, size_t> addr_to_idx;
+      for (int32_t idx = start_expert; idx < end_expert; ++idx) {
+        int32_t expert_id = unique_experts[idx];
+        auto step_it = step_by_expert.find(expert_id);
+        if (step_it == step_by_expert.end()) {
+          LOG(ERROR) << "Missing expert assignment after optimizer validation. "
+                     << "layer=" << l << ", rank=" << r
+                     << ", expert_id=" << expert_id;
+          continue;
+        }
+        const auto& s = step_it->second;
+        size_t source_idx = 0;
+        auto source_it = addr_to_idx.find(s.src.instance);
+        if (source_it == addr_to_idx.end()) {
+          source_idx = layer_plan.source_experts.size();
+          addr_to_idx.emplace(s.src.instance, source_idx);
+          layer_plan.source_experts.push_back({s.src.instance, {}});
+        } else {
+          source_idx = source_it->second;
+        }
+        layer_plan.source_experts[source_idx].expert_ids.push_back(expert_id);
+      }
+    }
+  }
+
+  return result;
 }
 
 void InstanceMgr::get_load_metrics(LoadBalanceInfos* infos) {

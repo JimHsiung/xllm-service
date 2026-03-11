@@ -110,3 +110,8 @@ DEFINE_int32(target_tpot,
              "Target Time Per Output Token (TPOT), in milliseconds.");
 
 BRPC_VALIDATE_GFLAG(target_tpot, brpc::NonNegativeInteger);
+
+DEFINE_bool(
+    enable_d2d_transmission_optimizer,
+    false,
+    "Whether to enable D2DTransmissionOptimizer for expert transfer plan.");

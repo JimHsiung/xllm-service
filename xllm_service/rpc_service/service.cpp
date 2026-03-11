@@ -24,6 +24,43 @@ limitations under the License.
 #include "common/xllm/status.h"
 #include "scheduler/scheduler.h"
 
+namespace {
+
+void BuildExpertTransferPlanProto(
+    const xllm_service::ExpertTransferPlanData& plan_data,
+    xllm_service::proto::ExpertTransferPlan* plan_proto) {
+  if (plan_proto == nullptr) {
+    return;
+  }
+  plan_proto->Clear();
+  for (const auto& rank_data : plan_data.rank_plans) {
+    auto* rank_plan = plan_proto->add_rank_plans();
+    for (const auto& layer_data : rank_data.layer_plans) {
+      auto* layer_plan = rank_plan->add_layer_plans();
+      for (const auto& source_data : layer_data.source_experts) {
+        auto* source_plan = layer_plan->add_source_experts();
+        source_plan->set_source_addr(source_data.source_addr);
+        for (int32_t expert_id : source_data.expert_ids) {
+          source_plan->add_expert_ids(expert_id);
+        }
+      }
+    }
+  }
+}
+
+size_t CountPlanSourceMappings(
+    const xllm_service::ExpertTransferPlanData& plan_data) {
+  size_t count = 0;
+  for (const auto& rank_data : plan_data.rank_plans) {
+    for (const auto& layer_data : rank_data.layer_plans) {
+      count += layer_data.source_experts.size();
+    }
+  }
+  return count;
+}
+
+}  // namespace
+
 namespace xllm_service {
 
 XllmRpcServiceImpl::XllmRpcServiceImpl(const Options& options,
@@ -145,31 +182,38 @@ void XllmRpcService::GetStaticPrefillList(
   }
 }
 
-InstanceMetaInfo XllmRpcServiceImpl::get_matching_instance(
+WeightTransferPlanResult XllmRpcServiceImpl::get_weight_transfer_plan(
     const std::string& instance_name,
     int32_t world_size,
     int32_t dp_size,
     int32_t ep_size) {
-  return scheduler_->get_matching_instance(
+  return scheduler_->get_weight_transfer_plan(
       instance_name, world_size, dp_size, ep_size);
 }
 
-void XllmRpcService::GetMatchingInstance(
+void XllmRpcService::GetWeightTransferPlan(
     google::protobuf::RpcController* cntl_base,
-    const proto::MatchInstanceRequest* req,
-    proto::WeightTransferAddrs* resp,
+    const proto::WeightTransferPlanRequest* req,
+    proto::WeightTransferPlanResponse* resp,
     google::protobuf::Closure* done) {
   brpc::ClosureGuard done_guard(done);
-  InstanceMetaInfo metainfo = xllm_rpc_service_impl_->get_matching_instance(
-      req->instance_name(), req->world_size(), req->dp_size(), req->ep_size());
-
-  if (metainfo.name.empty()) {
+  WeightTransferPlanResult result =
+      xllm_rpc_service_impl_->get_weight_transfer_plan(req->instance_name(),
+                                                       req->world_size(),
+                                                       req->dp_size(),
+                                                       req->ep_size());
+  if (!result.matched || result.matched_instance.name.empty()) {
+    resp->set_has_weight_transfer_source(false);
     return;
   }
 
-  for (auto& addr : metainfo.weight_transfer_addrs) {
-    *(resp->add_addrs()) = addr;
+  for (auto& addr : result.matched_instance.weight_transfer_addrs) {
+    *(resp->add_weight_transfer_addrs()) = addr;
   }
+  resp->set_has_weight_transfer_source(resp->weight_transfer_addrs_size() > 0);
+
+  BuildExpertTransferPlanProto(result.expert_transfer_plan,
+                               resp->mutable_expert_transfer_plan());
 }
 
 void XllmRpcService::Generations(google::protobuf::RpcController* cntl_base,

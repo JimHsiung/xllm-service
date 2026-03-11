@@ -46,10 +46,11 @@ class XllmRpcServiceImpl final {
   std::vector<std::string> get_static_prefill_list(
       const std::string& decode_name);
 
-  InstanceMetaInfo get_matching_instance(const std::string& instance_name,
-                                         int32_t world_size,
-                                         int32_t dp_size,
-                                         int32_t ep_size);
+  WeightTransferPlanResult get_weight_transfer_plan(
+      const std::string& instance_name,
+      int32_t world_size,
+      int32_t dp_size,
+      int32_t ep_size);
 
  public:
   // handle generations from prefill/decode instance
@@ -107,10 +108,11 @@ class XllmRpcService : public proto::XllmRpcService {
                                     proto::InstanceIDs* resp,
                                     google::protobuf::Closure* done) override;
 
-  virtual void GetMatchingInstance(google::protobuf::RpcController* cntl_base,
-                                   const proto::MatchInstanceRequest* req,
-                                   proto::WeightTransferAddrs* resp,
-                                   google::protobuf::Closure* done) override;
+  virtual void GetWeightTransferPlan(
+      google::protobuf::RpcController* cntl_base,
+      const proto::WeightTransferPlanRequest* req,
+      proto::WeightTransferPlanResponse* resp,
+      google::protobuf::Closure* done) override;
 
   // xllm service receive response from decode instance directly in disagg pd
   // mode. This can eliminate the cost brought by forwarding through prefill.

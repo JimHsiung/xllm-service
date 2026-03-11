@@ -79,9 +79,9 @@ enum class InstanceType : int8_t {
 };
 
 struct LoadMetrics {
-  LoadMetrics() : waiting_requests_num(0), gpu_cache_usage_perc(0){};
+  LoadMetrics() : waiting_requests_num(0), gpu_cache_usage_perc(0) {};
   LoadMetrics(const uint64_t& waiting_reqs_num, const float& usage)
-      : waiting_requests_num(waiting_reqs_num), gpu_cache_usage_perc(usage){};
+      : waiting_requests_num(waiting_reqs_num), gpu_cache_usage_perc(usage) {};
 
   uint64_t waiting_requests_num;
   float gpu_cache_usage_perc;
@@ -332,6 +332,35 @@ struct CacheLocations {
     return hbm_instance_set.empty() && dram_instance_set.empty() &&
            ssd_instance_set.empty();
   }
+};
+
+struct ExpertDistribution {
+  std::string instance_name;
+  std::vector<int32_t> dims;
+  std::vector<int32_t> data;
+};
+
+struct SourceExpertIdsData {
+  std::string source_addr;
+  std::vector<int32_t> expert_ids;
+};
+
+struct LayerExpertTransferPlanData {
+  std::vector<SourceExpertIdsData> source_experts;
+};
+
+struct RankExpertTransferPlanData {
+  std::vector<LayerExpertTransferPlanData> layer_plans;
+};
+
+struct ExpertTransferPlanData {
+  std::vector<RankExpertTransferPlanData> rank_plans;
+};
+
+struct WeightTransferPlanResult {
+  InstanceMetaInfo matched_instance;
+  ExpertTransferPlanData expert_transfer_plan;
+  bool matched = false;
 };
 
 /**
