@@ -176,6 +176,13 @@ WeightTransferPlanResult InstanceMgr::get_weight_transfer_plan(
   WeightTransferPlanResult result;
   bool has_matched_instance = false;
   std::vector<ExpertDistribution> expert_dists;
+  auto set_matched_instance = [&](const InstanceMetaInfo& inst) {
+    if (!has_matched_instance) {
+      result.matched_instance = inst;
+      result.matched = true;
+      has_matched_instance = true;
+    }
+  };
   for (auto& inst : instances_) {
     // skip self
     if (inst.first == instance_name) {
@@ -211,6 +218,19 @@ WeightTransferPlanResult InstanceMgr::get_weight_transfer_plan(
       dist.data =
           std::vector<int32_t>(response.data().begin(), response.data().end());
 
+      // Dense models do not have expert distribution. Treat empty dims/data as
+      // a valid base weight transfer source and skip MoE expert transfer
+      // planning.
+      if (dist.dims.empty() && dist.data.empty()) {
+        if (inst.second.weight_transfer_addrs.empty()) {
+          LOG(ERROR) << "Invalid weight_transfer_addrs for instance "
+                     << inst.first << ", actual=0";
+          continue;
+        }
+        set_matched_instance(inst.second);
+        continue;
+      }
+
       if (dist.dims.size() < 3) {
         LOG(ERROR) << "Invalid expert distribution dims for instance "
                    << inst.first << ", dims_size=" << dist.dims.size();
@@ -243,11 +263,7 @@ WeightTransferPlanResult InstanceMgr::get_weight_transfer_plan(
       }
 
       expert_dists.emplace_back(std::move(dist));
-      if (!has_matched_instance) {
-        result.matched_instance = inst.second;
-        result.matched = true;
-        has_matched_instance = true;
-      }
+      set_matched_instance(inst.second);
     }
   }
 
@@ -266,10 +282,15 @@ WeightTransferPlanResult InstanceMgr::get_weight_transfer_plan(
               << ") != world_size(" << world_size << ")";
     return result;
   }
-  if (world_size <= 0 || ep_size <= 0 || expert_dists.empty()) {
+  if (world_size <= 0 || ep_size <= 0) {
     LOG(WARNING) << "Skip D2DTransmissionOptimizer due to invalid config."
                  << " world_size=" << world_size << ", ep_size=" << ep_size
                  << ", expert_dists=" << expert_dists.size();
+    return result;
+  }
+  if (expert_dists.empty()) {
+    LOG(INFO) << "Skip D2DTransmissionOptimizer because no expert distribution "
+              << "is available.";
     return result;
   }
 
